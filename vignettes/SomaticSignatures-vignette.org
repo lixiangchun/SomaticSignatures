@@ -1,0 +1,879 @@
+#+TITLE: Inferring Somatic Signatures from Single Nucleotide Variant Calls
+#+AUTHOR: Julian Gehring, EMBL Heidelberg
+
+#+OPTIONS: html-postamble:nil html-preamble:nil html-style:nil
+
+#+PROPERTY: tangle yes
+
+#+BEGIN_HTML
+<!--
+%\VignetteEngine{knitr::knitr}
+%\VignetteIndexEntry{SomaticSignatures}
+%\VignettePackage{SomaticSignatures}
+-->
+#+END_HTML
+
+#+BEGIN_SRC R :exports code :ravel results='hide', echo=FALSE, message=FALSE, warning=FALSE
+  set.seed(1)
+
+  options(width = 70)
+
+  library(knitr)
+
+  inlineCode <- function(file, format = c) {
+      file_exist = sapply(file, file.exists)
+      file = file[file_exist]
+      if(length(file) == 0)
+          return("")
+      style = sapply(file,
+          function(file) {
+              paste(readLines(file), collapse = "\n")},
+          USE.NAMES = FALSE)
+      style = sapply(style, format)
+      style = paste(style, "\n", collapse = "\n\n")
+      return(style)
+  }
+
+  knitrHeader <- function(css, js) {
+      header = opts_knit$get("header")
+      if(!missing(css) && !identical(css, character())) {
+          header["highlight"] = inlineCode(css)
+      }
+      if(!missing(js) && !identical(js, character())) {
+          header["js"] = inlineCode(js, formatInlineJS)
+      }
+      return(header)
+  }
+
+  base_dir = system.file(package = "SomaticSignatures")
+  css_path = file.path(base_dir, "css", "bioc.css")
+
+  opts_knit$set(self.contained = TRUE,
+                upload.fun = image_uri,
+                header = knitrHeader(css = css_path))
+
+  opts_chunk$set(comment = "  ",
+                 fig.path = "",
+                 fig.align = "center",
+                 out.width = "65%",
+                 dpi = 300,
+                 indent = 10,
+                 cache = FALSE,
+                 cache.path = "../cache")
+
+  knit_hooks$set(fig.cap = function(before, options, envir) {
+      if(!before) {
+          paste('<p class="caption">',options$fig.cap,"</p>",sep="")
+      }
+  })
+#+END_SRC
+
+#+BEGIN_HTML
+<p class="author-top">Julian Gehring, EMBL Heidelberg</p>
+#+END_HTML
+
+
+* Motivation: The Concept Behind Mutational Signatures
+
+Recent publications introduced the concept of identifying mutational signatures
+from cancer sequencing studies and linked them to potential mutation generation
+processes [[cite:nik-zainal_mutational_2012]] cite:alexandrov_signatures_2013
+cite:alexandrov_deciphering_2013.  Conceptually, this relates somatically
+occurring /single nucleotide variants/ (SNVs) to the surrounding sequence which
+will be referred to as /mutational/ or /somatic motifs/ in the following.  Based
+on the frequency of the motifs occurring in multiple samples, these can be
+decomposed mathematically into so called /mutational signatures/.  In case of
+the investigation of tumors, the term /somatic signatures/ will be used here to
+distinguish them from germline mutations and their generating processes.
+
+The =SomaticSignatures= package provides an efficient and user-friendly
+implementation for the extraction of somatic motifs based on a list of
+somatically mutated genomic sites and the estimation of somatic signatures with
+different matrix decomposition algorithms.  Methodologically, this is based on
+the work of Nik-Zainal and colleagues cite:nik-zainal_mutational_2012. If you
+use =SomaticSignatures= in your research, please cite it as:
+
+#+BEGIN_QUOTE
+Gehring, Julian S., Bernd Fischer, Michael Lawrence, and Wolfgang Huber.\\
+/SomaticSignatures: Inferring Mutational Signatures from Single Nucleotide
+Variants./\\
+Bioinformatics, 2015, btv408. [[http://dx.doi.org/10.1093/bioinformatics/btv408]]
+#+END_QUOTE
+
+
+* Methodology: From Mutations to Somatic Signatures
+
+The basic idea of somatic signatures is composed of two parts:
+
+Firstly, each somatic mutation is described in relation of the sequence context
+in which it occurs.  As an example, consider a SNV, resulting in the alteration
+from =A= in the normal to =G= in the tumor sample, that is embedded in the
+sequence context =TAC=.  Thus, the somatic motif can be written as =TAC>TGC= or
+=T.C A>G=.  The frequency of these motifs across multiple samples is then
+represented as a matrix $M_{ij}$, where $i$ counts over the motifs and $j$ over
+the samples.
+
+In a second step, the matrix $M$ is numerically decomposed into two matrices $W$
+and $H$
+
+$M_{ij} \approx \sum_{k=1}^{r} W_{ik} H_{kj}$
+
+for a fixed number $r$ of signatures.  While $W$ describes the composition of
+each signature in term of somatic motifs, $H$ shows the contribution of the
+signature to the alterations present in each sample.
+
+
+* Workflow: Analysis with the SomaticSignatures Package
+
+The =SomaticSignatures= package offers a framework for inferring signatures of
+SNVs in a user-friendly and efficient manner for large-scale data sets.  A tight
+integration with standard data representations of the =Bioconductor= project
+[[cite:gentleman_bioconductor:_2004]] was a major design goal.  Further, it extends
+the selection of multivariate statistical methods for the matrix decomposition
+and allows a simple visualization of the results.
+
+For a typical workflow, a set of variant calls and the reference sequence are
+needed.  Ideally, the SNVs are represented as a =VRanges= object with the
+genomic location as well as reference and alternative allele defined.  The
+reference sequence can be, for example, a =FaFile= object, representing an
+indexed FASTA file, a =BSgenome= object, or a =GmapGenome= object.
+Alternatively, we provide functions to extract the relevant information from
+other sources of inputs.  At the moment, this covers the /MuTect/
+[[cite:cibulskis_sensitive_2013]] variant caller.
+
+Generally, the individual steps of the analysis can be summarized as:
+
+1. The somatic motifs for each variant are retrieved from the reference sequence
+   with the =mutationContext= function and converted to a matrix representation
+   with the =motifMatrix= function.
+
+2. Somatic signatures are estimated with a method of choice (the package
+   provides with =nmfDecomposition= and =pcaDecomposition= two approaches for
+   the NMF and PCA).
+
+3. The somatic signatures and their representation in the samples are assessed
+   with a set of accessor and plotting functions.
+
+To decompose $M$, the =SomaticSignatures= package implements two methods:
+
+- Non-negative matrix factorization (NMF) :: The NMF decomposes $M$ with the
+     constraint of positive components in $W$ and $H$
+     cite:gaujoux_flexible_2010.  The method was used
+     cite:nik-zainal_mutational_2012 for the identification of mutational
+     signatures, and can be computationally expensive for large data sets.
+
+- Principal component analysis (PCA) :: The PCA employs the eigenvalue
+     decomposition and is therefore suitable for large data sets
+     cite:stacklies_pcamethodsbioconductor_2007.  While this is related to the
+     NMF, no constraint on the sign of the elements of $W$ and $H$ exists.
+
+Other methods can be supplied through the =decomposition= argument of the
+=identifySignatures= function.
+
+
+* Use case: Estimating Somatic Signatures from TCGA WES Studies
+
+In the following, the concept of somatic signatures and the steps for inferring
+these from an actual biological data set are shown.  For the example, somatic
+variant calls from whole exome sequencing (WES) studies from The Cancer Genome
+Atlas (TCGA) project will be used, which are part of the
+=SomaticCancerAlterations= package.
+
+#+NAME: load_ss
+#+BEGIN_SRC R :session *R-ss-vignette* :exports code :ravel results='hide',message=FALSE
+  library(SomaticSignatures)
+#+END_SRC
+
+#+NAME: load_data_package
+#+BEGIN_SRC R :session *R-ss-vignette* :ravel results='hide',message=FALSE
+  library(SomaticCancerAlterations)
+  library(BSgenome.Hsapiens.1000genomes.hs37d5)
+#+END_SRC
+
+
+** Data: Preproccessing of the TCGA WES Studies
+
+The =SomaticCancerAlterations= package provides the somatic SNV calls for eight
+WES studies, each investigating a different cancer type.  The metadata
+summarizes the biological and experimental settings of each study.
+
+#+NAME: sca_metadata
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results output
+  sca_metadata = scaMetadata()
+
+  sca_metadata
+#+END_SRC
+
+#+RESULTS: sca_metadata
+#+begin_example
+          Cancer_Type        Center NCBI_Build Sequence_Source Sequencing_Phase
+gbm_tcga          GBM broad.mit.edu         37             WXS          Phase_I
+hnsc_tcga        HNSC broad.mit.edu         37         Capture          Phase_I
+kirc_tcga        KIRC broad.mit.edu         37         Capture          Phase_I
+luad_tcga        LUAD broad.mit.edu         37             WXS          Phase_I
+lusc_tcga        LUSC broad.mit.edu         37             WXS          Phase_I
+ov_tcga            OV broad.mit.edu         37             WXS          Phase_I
+skcm_tcga        SKCM broad.mit.edu         37         Capture          Phase_I
+thca_tcga        THCA broad.mit.edu         37             WXS          Phase_I
+               Sequencer Number_Samples Number_Patients
+gbm_tcga  Illumina GAIIx            291             291
+hnsc_tcga Illumina GAIIx            319             319
+kirc_tcga Illumina GAIIx            297             293
+luad_tcga Illumina GAIIx            538             519
+lusc_tcga Illumina GAIIx            178             178
+ov_tcga   Illumina GAIIx            142             142
+skcm_tcga Illumina GAIIx            266             264
+thca_tcga Illumina GAIIx            406             403
+                                    Cancer_Name
+gbm_tcga                Glioblastoma multiforme
+hnsc_tcga Head and Neck squamous cell carcinoma
+kirc_tcga                    Kidney Chromophobe
+luad_tcga                   Lung adenocarcinoma
+lusc_tcga          Lung squamous cell carcinoma
+ov_tcga       Ovarian serous cystadenocarcinoma
+skcm_tcga               Skin Cutaneous Melanoma
+thca_tcga                    Thyroid carcinoma
+#+end_example
+
+The starting point of the analysis is a =VRanges= object which describes the
+somatic variants in terms of their genomic locations as well as reference and
+alternative alleles.  For more details about this class and how to construct it,
+please see the documentation of the =VariantAnnotation= package
+[[cite:obenchain_variantannotation:_2011]].  In this example, all mutational calls
+of a study will be pooled together, in order to find signatures related to a
+specific cancer type.
+
+#+NAME: sca_to_vranges
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results output
+  sca_data = unlist(scaLoadDatasets())
+
+  sca_data$study = factor(gsub("(.*)_(.*)", "\\1", toupper(names(sca_data))))
+  sca_data = unname(subset(sca_data, Variant_Type %in% "SNP"))
+  sca_data = keepSeqlevels(sca_data, hsAutosomes())
+
+  sca_vr = VRanges(
+      seqnames = seqnames(sca_data),
+      ranges = ranges(sca_data), 
+      ref = sca_data$Reference_Allele,
+      alt = sca_data$Tumor_Seq_Allele2, 
+      sampleNames = sca_data$Patient_ID,
+      seqinfo = seqinfo(sca_data), 
+      study = sca_data$study)
+
+  sca_vr
+#+END_SRC
+
+#+RESULTS: sca_to_vranges
+#+begin_example
+VRanges with 3 ranges and 1 metadata column:
+      seqnames           ranges strand         ref              alt
+         <Rle>        <IRanges>  <Rle> <character> <characterOrRle>
+  gbm     chr1 [887446, 887446]      +           G                A
+  gbm     chr1 [909247, 909247]      +           C                T
+  gbm     chr1 [978952, 978952]      +           C                T
+          totalDepth       refDepth       altDepth   sampleNames
+      <integerOrRle> <integerOrRle> <integerOrRle> <factorOrRle>
+  gbm           <NA>           <NA>           <NA>  TCGA-06-5858
+  gbm           <NA>           <NA>           <NA>  TCGA-32-1977
+  gbm           <NA>           <NA>           <NA>  TCGA-06-0237
+      softFilterMatrix |    study
+              <matrix> | <factor>
+  gbm                  |      gbm
+  gbm                  |      gbm
+  gbm                  |      gbm
+  ---
+  seqlengths:
+        chr1      chr2      chr3      chr4 ...     chr20     chr21     chr22
+   249250621 243199373 198022430 191154276 ...  63025520  48129895  51304566
+  hardFilters: NULL
+#+end_example
+
+
+To get a first impression of the data, we count the number of somatic variants
+per study.
+
+#+NAME: sca_study_table
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value vector :rownames yes
+  sort(table(sca_vr$study), decreasing = TRUE)
+#+END_SRC
+
+#+RESULTS: sca_study_table
+| luad | 208724 |
+| skcm | 200589 |
+| hnsc |  67125 |
+| lusc |  61485 |
+| kirc |  24158 |
+| gbm  |  19938 |
+| thca |   6716 |
+| ov   |   5872 |
+
+
+
+** Motifs: Extracting the Sequence Context of Somatic Variants<<motifs>>
+
+In a first step, the sequence motif for each variant is extracted based on the
+genomic sequence.  Here, the =BSgenomes= object of the human hg19 reference is
+used for all samples.  However, [[personalized_genomes][personalized genomes or other sources for
+sequences]], for example an indexed FASTA file, can be used naturally.
+Additionally, we transform all motifs to have a pyrimidine base (=C= or =T=) as
+a reference base [[cite:alexandrov_signatures_2013]]. The resulting =VRanges= object
+then contains the new columns =context= and =alteration= which specify the
+sequence content and the base substitution.
+
+#+NAME: sca_vr_to_motifs
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results output
+  sca_motifs = mutationContext(sca_vr, BSgenome.Hsapiens.1000genomes.hs37d5)
+  head(sca_motifs)
+#+END_SRC
+
+#+RESULTS: sca_vr_to_motifs
+
+To continue with the estimation of the somatic signatures, the matrix $M$ of the
+form {motifs \times studies} is constructed.  The =normalize= argument specifies
+that frequencies rather than the actual counts are returned.
+
+#+NAME: sca_motif_occurrence
+#+BEGIN_SRC R :session *R-ss-vignette* :exports code :results value table :rownames yes :colnames yes
+  sca_mm = motifMatrix(sca_motifs, group = "study", normalize = TRUE)
+  
+  head(round(sca_mm, 4))
+#+END_SRC
+
+#+RESULTS: sca_motif_occurrence
+|        |    gbm |   hnsc |   kirc |   luad |   lusc |     ov |   skcm |   thca |
+|--------+--------+--------+--------+--------+--------+--------+--------+--------|
+| CA A.A | 0.0083 | 0.0098 | 0.0126 |   0.02 | 0.0165 | 0.0126 | 0.0014 | 0.0077 |
+| CA A.C | 0.0093 | 0.0082 | 0.0121 | 0.0217 | 0.0156 | 0.0192 |  9e-04 | 0.0068 |
+| CA A.G | 0.0026 | 0.0061 | 0.0046 | 0.0144 | 0.0121 |  0.006 |  4e-04 | 0.0048 |
+| CA A.T | 0.0057 | 0.0051 |  0.007 | 0.0134 |   0.01 | 0.0092 |  7e-04 | 0.0067 |
+| CA C.A | 0.0075 | 0.0143 | 0.0215 | 0.0414 |  0.039 | 0.0128 |  0.006 | 0.0112 |
+| CA C.C | 0.0075 | 0.0111 | 0.0138 | 0.0415 | 0.0275 | 0.0143 | 0.0018 | 0.0063 |
+
+
+The observed occurrence of the motifs, also termed /somatic spectrum/, can be
+visualized across studies, which gives a first impression of the data.  The
+distribution of the motifs clearly varies between the studies.
+
+#+NAME: sca_mutation_spectrum
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_mutation_spectrum.svg :ravel fig.cap='Mutation spectrum over studies'
+  plotMutationSpectrum(sca_motifs, "study")
+#+END_SRC
+
+
+** Decomposition: Inferring Somatic Signatures
+
+The somatic signatures can be estimated with each of the statistical methods
+implemented in the package.  Here, we will use the =NMF= and =PCA=, and compare
+the results.  Prior to the estimation, the number $r$ of signatures to obtain
+has to be fixed; in this example, the data will be decomposed into 5 signatures.
+
+#+NAME: sca_nmf_pca
+#+BEGIN_SRC R :session *R-ss-vignette* :results output
+  n_sigs = 5
+
+  sigs_nmf = identifySignatures(sca_mm, n_sigs, nmfDecomposition)
+
+  sigs_pca = identifySignatures(sca_mm, n_sigs, pcaDecomposition)
+#+END_SRC
+
+#+NAME: sca_explore_nmf
+#+BEGIN_SRC R :session *R-ss-vignette* :results output
+  sigs_nmf
+#+END_SRC
+
+#+NAME: sca_explore_pca
+#+BEGIN_SRC R :session *R-ss-vignette* :results output
+  sigs_pca
+#+END_SRC
+
+The individual matrices can be further inspected through the accessors
+=signatures=, =samples=, =observed= and =fitted=.
+
+
+** Assessment: Number of Signatures
+
+Up to now, we have performed the decomposition based on a known number $r$ of
+signatures.  In many settings, prior biological knowledge or complementing
+experiments may allow to determine $r$ independently.  If this is not the case,
+we can try to infer suitable values for $r$ from the data.
+
+Using the =assessNumberSignatures= function, we can compute the residuals sum of
+squares (RSS) and the explained variance between the observed $M$ and fitted
+$WH$ mutational spectrum for different numbers of signatures.  These measures
+are generally applicable to all kinds of decomposition methods, and can aid in
+choosing a likely number of signatures.  The usage and arguments are analogous
+to the =identifySignatures= function.
+
+#+BEGIN_SRC R
+  n_sigs = 2:8
+
+  gof_nmf = assessNumberSignatures(sca_mm, n_sigs, nReplicates = 5)
+
+  gof_pca = assessNumberSignatures(sca_mm, n_sigs, pcaDecomposition)
+#+END_SRC
+
+The obtained statistics can further be visualized with the
+=plotNumberSignatures=.  For each tested number of signatures, black crosses
+indicate the results of individual runs, while the red dot represents the
+average over all respective runs.  Please note that having multiple runs is only
+relevant for randomly seeded decomposition methods, as the NMF in our example.
+
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file p_gof_nmf.svg :ravel fig.cap='Summary statistics for selecting the number of signatures in the NMF decomposition.'
+  plotNumberSignatures(gof_nmf)
+#+END_SRC
+
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file p_gof_pca.svg :ravel fig.cap='Summary statistics for selecting the number of signatures in the PCA decomposition.'
+  plotNumberSignatures(gof_pca)
+#+END_SRC
+
+$r$ can then be chosen such that increasing the number of signatures does not
+yield a significantly better approximation of the data, i.e. that the RSS and
+the explained variance do not change sufficiently for more complex models.  The
+first inflection point of the RSS curve has also been proposed as a measure for
+the number of features in this context [[cite:hutchins_position-dependent_2008]].
+Judging from both statistics for our dataset, a total of 5 signatures seems to
+explain the characteristics of the observed mutational spectrum well.  In
+practice, a combination of a statistical assessment paired with biological
+knowledge about the nature of the data will allow for the most reliable
+interpretation of the results.
+
+
+** Visualization: Exploration of Signatures and Samples
+
+To explore the results for the TCGA data set, we will use the plotting
+functions.  All figures are generated with the =ggplot2= package, and thus,
+their properties and appearances can directly be modified, even at a later
+stage.
+
+#+NAME: load_ggplot2
+#+BEGIN_SRC R :session *R-ss-vignette* :ravel results='hide',message=FALSE
+  library(ggplot2)
+#+END_SRC
+
+Focusing on the results of the NMF first, the five somatic signatures (named S1
+to S5) can be visualized either as a heatmap or as a barchart.
+
+#+NAME: sca_plot_nmf_signatures_map
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_nmf_signatures_map.svg :ravel fig.cap='Composition of somatic signatures estimated with the NMF, represented as a heatmap.'
+  plotSignatureMap(sigs_nmf) + ggtitle("Somatic Signatures: NMF - Heatmap")
+#+END_SRC
+
+#+RESULTS: sca_plot_nmf_signatures_map
+[[file:report/p_nmf_signatures_map.svg]]
+
+#+NAME: sca_plot_nmf_signatures
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_nmf_signatures.svg :ravel fig.cap='Composition of somatic signatures estimated with the NMF, represented as a barchart.'
+  plotSignatures(sigs_nmf) + ggtitle("Somatic Signatures: NMF - Barchart")
+#+END_SRC
+
+
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_nmf_observed.svg
+  plotObservedSpectrum(sigs_nmf)
+#+END_SRC
+
+
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_nmf_fitted.svg
+  plotFittedSpectrum(sigs_nmf)
+#+END_SRC
+
+
+#+RESULTS: sca_plot_nmf_signatures
+[[file:report/p_nmf_signatures.svg]]
+
+Each signature represents different properties of the somatic spectrum observed
+in the data.  While signature S1 is mainly characterized by selective =C>T=
+alterations, others as S4 and S5 show a broad distribution across the motifs.
+
+In addition, the contribution of the signatures in each study can be represented
+with the same sets of plots.  Signature S1 and S3 are strongly represented in
+the GBM and SKCM study, respectively.  Other signatures show a weaker
+association with a single cancer type.
+
+#+NAME: sca_plot_nmf_samples_map
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_nmf_samples_map.svg :ravel fig.cap='Occurrence of signatures estimated with the NMF, represented as a heatmap.'
+  plotSampleMap(sigs_nmf)
+#+END_SRC
+
+#+RESULTS: sca_plot_nmf_samples_map
+[[file:report/p_nmf_samples_map.svg]]
+
+#+NAME: sca_plot_nmf_samples
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_nmf_samples.svg :ravel fig.cap='Occurrence of signatures estimated with the NMF, represented as a barchart.'
+  plotSamples(sigs_nmf)
+#+END_SRC
+
+#+RESULTS: sca_plot_nmf_samples
+[[file:report/p_nmf_samples.svg]]
+
+
+In the same way as before, the results of the PCA can be visualized.  In
+contrast to the NMF, the signatures also contain negative values, indicating the
+depletion of a somatic motif.
+
+Comparing the results of the two methods, we can see similar characteristics
+between the sets of signatures, for example S1 of the NMF and S2 of the PCA.
+
+#+NAME: sca_plot_pca_signatures_map
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_pca_signatures_map.svg :ravel fig.cap='Composition of somatic signatures estimated with the PCA, represented as a heatmap.'
+  plotSignatureMap(sigs_pca) + ggtitle("Somatic Signatures: PCA - Heatmap")
+#+END_SRC
+
+#+RESULTS: sca_plot_pca_signatures_map
+[[file:report/p_pca_signatures_map.svg]]
+
+#+NAME: sca_plot_pca_signatures
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_pca_signatures.svg :ravel fig.cap='Composition of somatic signatures estimated with the PCA, represented as a barchart.'
+  plotSignatures(sigs_pca) + ggtitle("Somatic Signatures: PCA - Barchart")
+#+END_SRC
+
+
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_pca_fitted.svg
+  plotFittedSpectrum(sigs_pca)
+#+END_SRC
+
+Since the observed mutational spectrum is defined by the data alone, it is
+identical for both all decomposition methods.
+
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_pca_observed.svg
+  plotObservedSpectrum(sigs_pca)
+#+END_SRC
+
+
+*** Customization: Changing Plot Properties
+
+As elaborated before, since all plots are generated with the =ggplot2= framework
+[[cite:wickham_ggplot2:_2010]], we can change all their properties.  To continue the
+example from before, we will visualize the relative contribution of the
+mutational signatures in the studies, and change the plot to fit our needs
+better.
+
+#+NAME: load_ggplot2_again
+#+BEGIN_SRC R :session *R-ss-vignette* :ravel results='hide',message=FALSE
+  library(ggplot2)
+#+END_SRC
+
+#+NAME: sca_plot_nmf_samples_mod
+#+BEGIN_SRC R :session *R-ss-vignette* :ravel results='hide',message=FALSE
+  p = plotSamples(sigs_nmf)
+
+  ## (re)move the legend
+  p = p + theme(legend.position = "none")
+  ## (re)label the axis
+  p = p + xlab("Studies")
+  ## add a title
+  p = p + ggtitle("Somatic Signatures in TGCA WES Data")
+  ## change the color scale
+  p = p + scale_fill_brewer(palette = "Blues")
+  ## decrease the size of x-axis labels
+  p = p + theme(axis.text.x = element_text(size = 9))
+#+END_SRC
+
+#+NAME: sca_plot_nmf_samples_mod_print
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_nmf_samples.svg :ravel fig.cap='Occurrence of signatures estimated with the NMF, customized plot. See the original plot above for comparisons.'
+  p
+#+END_SRC
+
+
+If you want to visualize a large number of samples or signatures, the default
+color palette may not provide a sufficient number of distinct colors.  You can
+add a well-suited palette to your plot, as we have shown before with the
+=scale_fill= functions.  For example, =scale_fill_discrete= will get you the
+default =ggplot2= color scheme; while this supports many more colors, the
+individual levels may be hard to distinguish.
+
+
+** Clustering: Grouping by Motifs or Samples
+
+An alternative approach to interpreting the mutational spectrum by decomposition
+is clustering.  With the =clusterSpectrum= function, the clustering is computed,
+by grouping either by the =sample= or =motif= dimension of the spectrum.  By
+default, the Euclidean distance is used; other distance measures, as for example
+cosine similarity, are implemented is the =proxy= package and can be passed as
+an optional argument.
+
+#+BEGIN_SRC R :session *R-ss-vignette*
+  clu_motif = clusterSpectrum(sca_mm, "motif")
+#+END_SRC
+
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file p_cluster_motifs.svg :ravel fig.cap='Hierachical clustering of the mutational spectrum, according to motif.'
+  library(ggdendro)
+
+  p = ggdendrogram(clu_motif, rotate = TRUE)
+  p
+#+END_SRC
+
+
+
+** Extension: Correction for Batch Effects and Confounding Variables
+
+When investigating somatic signatures between samples from different studies,
+corrections for technical confounding factors should be considered.  In our use
+case of the TCGA WES studies, this is of minor influence due to similar
+sequencing technology and variant calling methods across the studies.
+Approaches for the identification of so termed batch effects have been proposed
+cite:leek_capturing_2007 [[cite:sun_multiple_2012]] and existing implementations can
+be used in identifying confounding variables as well as correcting for them.
+The best strategy in addressing technical effects depends strongly on the
+experimental design; we recommend reading the respective literature and software
+documentation for finding an optimal solution in complex settings.
+
+From the metadata of the TCGA studies, we have noticed that two different
+sequencing approaches have been employed, constituting a potential technical
+batch effect.  The =ComBat= function of the =sva= package allows us to adjust
+for this covariate, which yields a mutational spectrum corrected for
+contributions related to sequencing technology.  We can then continue with the
+identification of somatic signatures as we have seen before.
+
+#+NAME: sva_load
+#+BEGIN_SRC R :session *R-ss-vignette* :exports code :ravel results='hide',message=FALSE
+  library(sva)
+#+END_SRC
+
+#+NAME: sva_batch
+#+BEGIN_SRC R :session *R-ss-vignette*
+  sca_anno = as.data.frame(lapply(sca_metadata, unlist))
+
+  model_null = model.matrix(~ 1, sca_anno)
+
+  sca_mm_batch = ComBat(sca_mm, batch = sca_anno$Sequence_Source, mod = model_null)
+#+END_SRC
+
+
+** Extension: Normalization of Sequence Motif Frequencies
+
+If comparisons are performed across samples or studies with different capture
+targets, for example by comparing whole exome with whole genome sequencing,
+further corrections for the frequency of sequence motifs can be taken into
+account cite:nik-zainal_mutational_2012.  The =kmerFrequency= function provides
+the basis for calculating the occurrence of k-mers over a set of ranges of a
+reference sequence.
+ 
+As an example, we compute the frequency of 3-mers for the human toplevel
+chromosomes, based on a sample of 10'000 locations.
+
+#+NAME: kmer_hs_chrs
+#+BEGIN_SRC R :session *R-ss-vignette* :exports code :ravel results='hide',message=FALSE
+  k = 3
+  n = 1e4
+         
+  hs_chrs = as(seqinfo(BSgenome.Hsapiens.1000genomes.hs37d5), "GRanges")
+  hs_chrs = keepSeqlevels(hs_chrs, c(1:22, "X", "Y"))
+
+  k3_hs_chrs = kmerFrequency(BSgenome.Hsapiens.1000genomes.hs37d5, n, k, hs_chrs)
+  k3_hs_chrs
+ #+END_SRC
+
+Analogously, the k-mer occurrence across a set of enriched regions, such as in
+exome or targeted sequencing, can be obtained easily.  The following outlines
+how to apply the approach to the human exome.
+
+#+NAME: kmer_exons
+#+BEGIN_SRC R :exports code :eval no :ravel eval=FALSE
+  library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+
+  k = 3
+  n = 1e4
+      
+  hs_exons = reduce(exons(TxDb.Hsapiens.UCSC.hg19.knownGene))
+  hs_exons = ncbi(keepStandardChromosomes(hs_exons))
+
+  k3_exons = kmerFrequency(BSgenome.Hsapiens.1000genomes.hs37d5, n, k, hs_exons)
+#+END_SRC
+
+With the =normalizeMotifs= function, the frequency of motifs can be adjusted.
+Here, we will transform our results of the TCGA WES studies to have the same
+motif distribution as of a whole-genome analysis.  The =kmers= dataset contains
+the estimated frequency of 3-mers across the human genome and exome.
+
+#+NAME: normalize_motifs
+#+BEGIN_SRC R
+  data(kmers)
+  norms = k3wg / k3we
+  head(norms)
+
+  sca_mm_norm = normalizeMotifs(sca_mm, norms)
+#+END_SRC
+
+
+** Extension: Motifs from Non-Reference Genomes<<personalized_genomes>>
+
+When we [[motifs][determine the sequence context]] for each alteration, we typically use one
+of the reference BSgenome packages in Bioconductor.  But we are not restricted
+to those, and derive the somatic motifs from different types of sequence
+sources, for example 2bit and FASTA files.  More precisely, the
+=mutationContext= function will work on any object for which a =getSeq= method
+is defined.  You can get the full list available on your system, the results may
+vary depending on which packages you have loaded.
+
+#+BEGIN_SRC R
+  showMethods("getSeq")
+#+END_SRC
+
+This allows us to perform our analysis also on non-standard organisms and
+genomes, for which a BSgenome package is not available, for example the
+1000genomes human reference sequence.  Or we can generate genomic references for
+specific populations, by updating the standard genomes with a set of known
+variants; see the documentation of the =BSgenome= package and the =injectSNPs=
+function in particular for this.
+
+Taking further, we can base our analysis on the personalized genomic sequence
+for each individual, in case it is available.  If we imagined that we had a set
+of somatic variant calls as =VCF= files and the personalized genomic sequence as
+=FASTA= files for two individuals =A= and =B= at hand, here a simple outline on
+how our analysis could work.
+
+#+BEGIN_SRC R :eval no :ravel eval=FALSE
+  ## Somatic variant calls
+  vr_A = readVcfAsVRanges(vcf_A_path, "GenomeA")
+  vr_B = readVcfAsVRanges(vcf_B_path, "GenomeB")
+
+  ## Genomic sequences
+  fa_A = FaFile(fasta_A_path)
+  fa_B = FaFile(fasta_B_path)
+
+  ## Somatic motifs
+  vr_A = mutationContext(vr_A, fa_A)
+  vr_B = mutationContext(vr_B, fa_B)
+
+  ## Combine for further analysis
+  vr = c(vr_A, vr_B)
+#+END_SRC
+
+
+
+** Visualization: Mutational Landscapes and Hypermutated Regions  :noexport:
+
+Another relevant aspect of exploring mutational processes is also the
+distribution of variants across the genome, which can indicate local effects of
+mutational processes and regions of hypermutations.  So called rainfall plots
+[[cite:nik-zainal_mutational_2012]] show the distance between neighboring variants
+along chromosomes, which can be also colored according to arbitrarily defined
+properties.  As an example, we show all somatic SNVs for the GBM study colored
+by the type of alteration.
+
+#+NAME: sca_vr_gbm
+#+BEGIN_SRC R :session *R-ss-vignette* :exports code
+  sca_gbm = sca_motifs[ names(sca_motifs) %in% "gbm"]
+#+END_SRC
+
+
+#+COMMENT: The plotting fails since 'plotGrandLinear' can't handle 'VRanges' object. Converting this to a 'GRanges' fixes the problem.
+
+#+NAME: sca_plot_rainfall_alteration
+#+BEGIN_SRC R :session *R-ss-vignette* :exports both :results value graphics :file report/p_rainfall_alteration.svg :ravel fig.cap='Rainfall plot for the GBM study, colored by alteration type.'
+  plotRainfall(sca_gbm, group = "alteration", size = 1)
+#+END_SRC
+
+
+
+* Alternatives: Inferring Somatic Signatures with Different Approaches
+
+For the identification of somatic signatures, other methods and implementations
+exist.  The original framework [[cite:nik-zainal_mutational_2012]]
+cite:alexandrov_deciphering_2013 proposed for this is based on the NMF and
+available for the Matlab programming language cite:alexandrov_wtsi_2012.  In
+extension, a probabilistic approach based on Poisson processes has been proposed
+[[cite:fischer_emu:_2013-1]] and implemented [[cite:fischer_emu:_2013]].
+
+
+* Frequently Asked Questions
+
+** Citing SomaticSignatures
+
+If you use the =SomaticSignatures= package in your work, please cite it:
+
+#+BEGIN_SRC R
+  citation("SomaticSignatures")
+#+END_SRC
+
+
+** Getting Help
+
+We welcome questions or suggestions about our software, and want to ensure that
+we eliminate issues if and when they appear.  We have a few requests to optimize
+the process:
+
+- All questions and follow-ups should take place over the [[http://support.bioconductor.org/][Bioconductor support
+  site]], which serves as a repository of information.  First search the site for
+  past threads which might have answered your question.
+
+- The subject line should contain /SomaticSignatures/ and a few words describing
+  the problem.
+
+- If you have a question about the behavior of a function, read the sections of
+  the manual page for this function by typing a question mark and the function
+  name, e.g. =?mutationContext=.  Additionally, read through the vignette to
+  understand the interplay between different functions of the package.  We spend
+  a lot of time documenting individual functions and the exact steps that the
+  software is performing.
+
+- Include all of your R code and its output related to the question you are
+  asking.
+  
+- Include complete warning or error messages, and conclude your message with the
+  full output of =sessionInfo()=.
+
+
+** Installing and Upgrading
+
+Before you want to install the =SomaticSignatures= package, please ensure that
+you have the latest version of =R= and =Bioconductor= installed.  For details on
+this, please have a look at the help packages for [[http://cran.r-project.org/][R]] and [[http://bioconductor.org/install/][Bioconductor]].  Then you
+can open =R= and run the following commands which will install the latest
+release version of =SomaticSignatures=:
+
+#+BEGIN_SRC R :eval no :ravel eval=FALSE
+  source("http://bioconductor.org/biocLite.R")
+  biocLite("SomaticSignatures")
+#+END_SRC
+
+Over time, the packages may also receive updates with bug fixes.  These
+installed packages can be updated with:
+
+#+BEGIN_SRC R :eval no :ravel eval=FALSE
+  source("http://bioconductor.org/biocLite.R")
+  biocLite()
+#+END_SRC
+
+
+** Working with VRanges
+
+A central object in the workflow of =SomaticSignatures= is the =VRanges= class
+which is part of the =VariantAnnotation= package.  It builds upon the commonly
+used =GRanges= class of the =GenomicRanges= package.  Essentially, each row
+represents a variant in terms of its genomic location as well as its reference
+and alternative allele.
+
+#+BEGIN_SRC R :exports code :ravel results='hide', message=FALSE
+  library(VariantAnnotation)
+#+END_SRC
+
+There are multiple ways of converting its own variant calls into a =VRanges=
+object.  One can for example import them from a =VCF= file with the =readVcf=
+function or employ the =readMutect= function for importing variant calls from
+the =MuTect= caller directly.  Further, one can also construct it from any other
+format in the form of:
+
+#+BEGIN_SRC R
+  vr = VRanges(
+      seqnames = "chr1",
+      ranges = IRanges(start = 1000, width = 1),
+      ref = "A",
+      alt = "C")
+
+  vr
+#+END_SRC
+
+
+
+* References
+
+#+BIBLIOGRAPHY: references abbrv limit:t option:-u option:-nobibsource option:-noabstract option:-nokeywords
+
+
+* Session Information
+
+#+BEGIN_SRC R :ravel echo=FALSE, results='markup'
+  sessionInfo()
+#+END_SRC
+

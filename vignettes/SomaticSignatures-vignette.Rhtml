@@ -1,0 +1,1284 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+<!-- 2015-11-02 Mo 15:14 -->
+<meta  http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<meta  name="viewport" content="width=device-width, initial-scale=1" />
+<title>Inferring Somatic Signatures from Single Nucleotide Variant Calls</title>
+<meta  name="generator" content="Org-mode" />
+<meta  name="author" content="Julian Gehring, EMBL Heidelberg" />
+<link rel="stylesheet" type="text/css" href="https://julian-gehring.github.io/bioc.css" />
+<script type="text/javascript">
+/*
+@licstart  The following is the entire license notice for the
+JavaScript code in this tag.
+
+Copyright (C) 2012-2013 Free Software Foundation, Inc.
+
+The JavaScript code in this tag is free software: you can
+redistribute it and/or modify it under the terms of the GNU
+General Public License (GNU GPL) as published by the Free Software
+Foundation, either version 3 of the License, or (at your option)
+any later version.  The code is distributed WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE.  See the GNU GPL for more details.
+
+As additional permission under GNU GPL version 3 section 7, you
+may distribute non-source (e.g., minimized or compacted) forms of
+that code without the copy of the GNU GPL normally required by
+section 4, provided you include this license notice and a URL
+through which recipients can access the Corresponding Source.
+
+
+@licend  The above is the entire license notice
+for the JavaScript code in this tag.
+*/
+<!--/*--><![CDATA[/*><!--*/
+ function CodeHighlightOn(elem, id)
+ {
+   var target = document.getElementById(id);
+   if(null != target) {
+     elem.cacheClassElem = elem.className;
+     elem.cacheClassTarget = target.className;
+     target.className = "code-highlighted";
+     elem.className   = "code-highlighted";
+   }
+ }
+ function CodeHighlightOff(elem, id)
+ {
+   var target = document.getElementById(id);
+   if(elem.cacheClassElem)
+     elem.className = elem.cacheClassElem;
+   if(elem.cacheClassTarget)
+     target.className = elem.cacheClassTarget;
+ }
+/*]]>*///-->
+</script>
+<script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+        displayAlign: "center",
+        displayIndent: "0em",
+
+        "HTML-CSS": { scale: 100,
+                        linebreaks: { automatic: "false" },
+                        webFont: "TeX"
+                       },
+        SVG: {scale: 100,
+              linebreaks: { automatic: "false" },
+              font: "TeX"},
+        NativeMML: {scale: 100},
+        TeX: { equationNumbers: {autoNumber: "AMS"},
+               MultLineWidth: "85%",
+               TagSide: "right",
+               TagIndent: ".8em"
+             }
+});
+</script>
+<script type="text/javascript"
+        src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS_HTML"></script>
+</head>
+<body>
+<div id="content">
+<h1 class="title">Inferring Somatic Signatures from Single Nucleotide Variant Calls</h1>
+<div id="table-of-contents">
+<h2>Table of Contents</h2>
+<div id="text-table-of-contents">
+<ul>
+<li><a href="#orgheadline1">1. Motivation: The Concept Behind Mutational Signatures</a></li>
+<li><a href="#orgheadline2">2. Methodology: From Mutations to Somatic Signatures</a></li>
+<li><a href="#orgheadline3">3. Workflow: Analysis with the SomaticSignatures Package</a></li>
+<li><a href="#orgheadline14">4. Use case: Estimating Somatic Signatures from TCGA WES Studies</a>
+<ul>
+<li><a href="#orgheadline4">4.1. Data: Preproccessing of the TCGA WES Studies</a></li>
+<li><a href="#orgheadline5">4.2. Motifs: Extracting the Sequence Context of Somatic Variants</a></li>
+<li><a href="#orgheadline6">4.3. Decomposition: Inferring Somatic Signatures</a></li>
+<li><a href="#orgheadline7">4.4. Assessment: Number of Signatures</a></li>
+<li><a href="#orgheadline9">4.5. Visualization: Exploration of Signatures and Samples</a>
+<ul>
+<li><a href="#orgheadline8">4.5.1. Customization: Changing Plot Properties</a></li>
+</ul>
+</li>
+<li><a href="#orgheadline10">4.6. Clustering: Grouping by Motifs or Samples</a></li>
+<li><a href="#orgheadline11">4.7. Extension: Correction for Batch Effects and Confounding Variables</a></li>
+<li><a href="#orgheadline12">4.8. Extension: Normalization of Sequence Motif Frequencies</a></li>
+<li><a href="#orgheadline13">4.9. Extension: Motifs from Non-Reference Genomes</a></li>
+</ul>
+</li>
+<li><a href="#orgheadline15">5. Alternatives: Inferring Somatic Signatures with Different Approaches</a></li>
+<li><a href="#orgheadline20">6. Frequently Asked Questions</a>
+<ul>
+<li><a href="#orgheadline16">6.1. Citing SomaticSignatures</a></li>
+<li><a href="#orgheadline17">6.2. Getting Help</a></li>
+<li><a href="#orgheadline18">6.3. Installing and Upgrading</a></li>
+<li><a href="#orgheadline19">6.4. Working with VRanges</a></li>
+</ul>
+</li>
+<li><a href="#orgheadline21">7. References</a></li>
+<li><a href="#orgheadline22">8. Session Information</a></li>
+</ul>
+</div>
+</div>
+<!--
+%\VignetteEngine{knitr::knitr}
+%\VignetteIndexEntry{SomaticSignatures}
+%\VignettePackage{SomaticSignatures}
+-->
+
+<!--begin.rcode results='hide', echo=FALSE, message=FALSE, warning=FALSE
+set.seed(1)
+
+options(width = 70)
+
+library(knitr)
+
+inlineCode <- function(file, format = c) {
+    file_exist = sapply(file, file.exists)
+    file = file[file_exist]
+    if(length(file) == 0)
+        return("")
+    style = sapply(file,
+        function(file) {
+            paste(readLines(file), collapse = "\n")},
+        USE.NAMES = FALSE)
+    style = sapply(style, format)
+    style = paste(style, "\n", collapse = "\n\n")
+    return(style)
+}
+
+knitrHeader <- function(css, js) {
+    header = opts_knit$get("header")
+    if(!missing(css) && !identical(css, character())) {
+        header["highlight"] = inlineCode(css)
+    }
+    if(!missing(js) && !identical(js, character())) {
+        header["js"] = inlineCode(js, formatInlineJS)
+    }
+    return(header)
+}
+
+base_dir = system.file(package = "SomaticSignatures")
+css_path = file.path(base_dir, "css", "bioc.css")
+
+opts_knit$set(self.contained = TRUE,
+              upload.fun = image_uri,
+              header = knitrHeader(css = css_path))
+
+opts_chunk$set(comment = "  ",
+               fig.path = "",
+               fig.align = "center",
+               out.width = "65%",
+               dpi = 300,
+               indent = 10,
+               cache = FALSE,
+               cache.path = "../cache")
+
+knit_hooks$set(fig.cap = function(before, options, envir) {
+    if(!before) {
+        paste('<p class="caption">',options$fig.cap,"</p>",sep="")
+    }
+})
+end.rcode-->
+
+<p class="author-top">Julian Gehring, EMBL Heidelberg</p>
+
+
+<div id="outline-container-orgheadline1" class="outline-2">
+<h2 id="orgheadline1"><span class="section-number-2">1</span> Motivation: The Concept Behind Mutational Signatures</h2>
+<div class="outline-text-2" id="text-1">
+<p>
+Recent publications introduced the concept of identifying mutational signatures
+from cancer sequencing studies and linked them to potential mutation generation
+processes [<a href="#nik-zainal_mutational_2012">11</a>,<a href="#alexandrov_signatures_2013">2</a>,<a href="#alexandrov_deciphering_2013">3</a>].  Conceptually, this relates somatically
+occurring <i>single nucleotide variants</i> (SNVs) to the surrounding sequence which
+will be referred to as <i>mutational</i> or <i>somatic motifs</i> in the following.  Based
+on the frequency of the motifs occurring in multiple samples, these can be
+decomposed mathematically into so called <i>mutational signatures</i>.  In case of
+the investigation of tumors, the term <i>somatic signatures</i> will be used here to
+distinguish them from germline mutations and their generating processes.
+</p>
+
+<p>
+The <code>SomaticSignatures</code> package provides an efficient and user-friendly
+implementation for the extraction of somatic motifs based on a list of
+somatically mutated genomic sites and the estimation of somatic signatures with
+different matrix decomposition algorithms.  Methodologically, this is based on
+the work of Nik-Zainal and colleagues [<a href="#nik-zainal_mutational_2012">11</a>]. If you
+use <code>SomaticSignatures</code> in your research, please cite it as:
+</p>
+
+<blockquote>
+<p>
+Gehring, Julian S., Bernd Fischer, Michael Lawrence, and Wolfgang Huber.<br  />
+<i>SomaticSignatures: Inferring Mutational Signatures from Single Nucleotide
+Variants.</i><br  />
+Bioinformatics, 2015, btv408. <a href="http://dx.doi.org/10.1093/bioinformatics/btv408">http://dx.doi.org/10.1093/bioinformatics/btv408</a>
+</p>
+</blockquote>
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline2" class="outline-2">
+<h2 id="orgheadline2"><span class="section-number-2">2</span> Methodology: From Mutations to Somatic Signatures</h2>
+<div class="outline-text-2" id="text-2">
+<p>
+The basic idea of somatic signatures is composed of two parts:
+</p>
+
+<p>
+Firstly, each somatic mutation is described in relation of the sequence context
+in which it occurs.  As an example, consider a SNV, resulting in the alteration
+from <code>A</code> in the normal to <code>G</code> in the tumor sample, that is embedded in the
+sequence context <code>TAC</code>.  Thus, the somatic motif can be written as <code>TAC&gt;TGC</code> or
+<code>T.C A&gt;G</code>.  The frequency of these motifs across multiple samples is then
+represented as a matrix \(M_{ij}\), where \(i\) counts over the motifs and \(j\) over
+the samples.
+</p>
+
+<p>
+In a second step, the matrix \(M\) is numerically decomposed into two matrices \(W\)
+and \(H\)
+</p>
+
+<p>
+\(M_{ij} \approx \sum_{k=1}^{r} W_{ik} H_{kj}\)
+</p>
+
+<p>
+for a fixed number \(r\) of signatures.  While \(W\) describes the composition of
+each signature in term of somatic motifs, \(H\) shows the contribution of the
+signature to the alterations present in each sample.
+</p>
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline3" class="outline-2">
+<h2 id="orgheadline3"><span class="section-number-2">3</span> Workflow: Analysis with the SomaticSignatures Package</h2>
+<div class="outline-text-2" id="text-3">
+<p>
+The <code>SomaticSignatures</code> package offers a framework for inferring signatures of
+SNVs in a user-friendly and efficient manner for large-scale data sets.  A tight
+integration with standard data representations of the <code>Bioconductor</code> project
+[<a href="#gentleman_bioconductor:_2004">8</a>] was a major design goal.  Further, it extends
+the selection of multivariate statistical methods for the matrix decomposition
+and allows a simple visualization of the results.
+</p>
+
+<p>
+For a typical workflow, a set of variant calls and the reference sequence are
+needed.  Ideally, the SNVs are represented as a <code>VRanges</code> object with the
+genomic location as well as reference and alternative allele defined.  The
+reference sequence can be, for example, a <code>FaFile</code> object, representing an
+indexed FASTA file, a <code>BSgenome</code> object, or a <code>GmapGenome</code> object.
+Alternatively, we provide functions to extract the relevant information from
+other sources of inputs.  At the moment, this covers the <i>MuTect</i>
+[<a href="#cibulskis_sensitive_2013">4</a>] variant caller.
+</p>
+
+<p>
+Generally, the individual steps of the analysis can be summarized as:
+</p>
+
+<ol class="org-ol">
+<li>The somatic motifs for each variant are retrieved from the reference sequence
+with the <code>mutationContext</code> function and converted to a matrix representation
+with the <code>motifMatrix</code> function.</li>
+
+<li>Somatic signatures are estimated with a method of choice (the package
+provides with <code>nmfDecomposition</code> and <code>pcaDecomposition</code> two approaches for
+the NMF and PCA).</li>
+
+<li>The somatic signatures and their representation in the samples are assessed
+with a set of accessor and plotting functions.</li>
+</ol>
+
+<p>
+To decompose \(M\), the <code>SomaticSignatures</code> package implements two methods:
+</p>
+
+<dl class="org-dl">
+<dt>Non-negative matrix factorization (NMF)</dt><dd>The NMF decomposes \(M\) with the
+constraint of positive components in \(W\) and \(H\)
+[<a href="#gaujoux_flexible_2010">7</a>].  The method was used
+[<a href="#nik-zainal_mutational_2012">11</a>] for the identification of mutational
+signatures, and can be computationally expensive for large data sets.</dd>
+
+<dt>Principal component analysis (PCA)</dt><dd>The PCA employs the eigenvalue
+decomposition and is therefore suitable for large data sets
+[<a href="#stacklies_pcamethodsbioconductor_2007">13</a>].  While this is related to the
+NMF, no constraint on the sign of the elements of \(W\) and \(H\) exists.</dd>
+</dl>
+
+<p>
+Other methods can be supplied through the <code>decomposition</code> argument of the
+<code>identifySignatures</code> function.
+</p>
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline14" class="outline-2">
+<h2 id="orgheadline14"><span class="section-number-2">4</span> Use case: Estimating Somatic Signatures from TCGA WES Studies</h2>
+<div class="outline-text-2" id="text-4">
+<p>
+In the following, the concept of somatic signatures and the steps for inferring
+these from an actual biological data set are shown.  For the example, somatic
+variant calls from whole exome sequencing (WES) studies from The Cancer Genome
+Atlas (TCGA) project will be used, which are part of the
+<code>SomaticCancerAlterations</code> package.
+</p>
+
+<!--begin.rcode load_ss, results='hide',message=FALSE
+library(SomaticSignatures)
+end.rcode-->
+
+<!--begin.rcode load_data_package, results='hide',message=FALSE
+library(SomaticCancerAlterations)
+library(BSgenome.Hsapiens.1000genomes.hs37d5)
+end.rcode-->
+</div>
+
+
+<div id="outline-container-orgheadline4" class="outline-3">
+<h3 id="orgheadline4"><span class="section-number-3">4.1</span> Data: Preproccessing of the TCGA WES Studies</h3>
+<div class="outline-text-3" id="text-4-1">
+<p>
+The <code>SomaticCancerAlterations</code> package provides the somatic SNV calls for eight
+WES studies, each investigating a different cancer type.  The metadata
+summarizes the biological and experimental settings of each study.
+</p>
+
+<!--begin.rcode sca_metadata
+sca_metadata = scaMetadata()
+
+sca_metadata
+end.rcode-->
+
+<p>
+The starting point of the analysis is a <code>VRanges</code> object which describes the
+somatic variants in terms of their genomic locations as well as reference and
+alternative alleles.  For more details about this class and how to construct it,
+please see the documentation of the <code>VariantAnnotation</code> package
+[<a href="#obenchain_variantannotation:_2011">12</a>].  In this example, all mutational calls
+of a study will be pooled together, in order to find signatures related to a
+specific cancer type.
+</p>
+
+<!--begin.rcode sca_to_vranges
+sca_data = unlist(scaLoadDatasets())
+
+sca_data$study = factor(gsub("(.*)_(.*)", "\\1", toupper(names(sca_data))))
+sca_data = unname(subset(sca_data, Variant_Type %in% "SNP"))
+sca_data = keepSeqlevels(sca_data, hsAutosomes())
+
+sca_vr = VRanges(
+    seqnames = seqnames(sca_data),
+    ranges = ranges(sca_data), 
+    ref = sca_data$Reference_Allele,
+    alt = sca_data$Tumor_Seq_Allele2, 
+    sampleNames = sca_data$Patient_ID,
+    seqinfo = seqinfo(sca_data), 
+    study = sca_data$study)
+
+sca_vr
+end.rcode-->
+
+
+<p>
+To get a first impression of the data, we count the number of somatic variants
+per study.
+</p>
+
+<!--begin.rcode sca_study_table
+sort(table(sca_vr$study), decreasing = TRUE)
+end.rcode-->
+</div>
+</div>
+
+
+
+<div id="outline-container-orgheadline5" class="outline-3">
+<h3 id="orgheadline5"><span class="section-number-3">4.2</span> Motifs: Extracting the Sequence Context of Somatic Variants<a id="orgtarget2"></a></h3>
+<div class="outline-text-3" id="text-4-2">
+<p>
+In a first step, the sequence motif for each variant is extracted based on the
+genomic sequence.  Here, the <code>BSgenomes</code> object of the human hg19 reference is
+used for all samples.  However, <a href="#orgtarget1">personalized genomes or other sources for
+sequences</a>, for example an indexed FASTA file, can be used naturally.
+Additionally, we transform all motifs to have a pyrimidine base (<code>C</code> or <code>T</code>) as
+a reference base [<a href="#alexandrov_signatures_2013">2</a>]. The resulting <code>VRanges</code> object
+then contains the new columns <code>context</code> and <code>alteration</code> which specify the
+sequence content and the base substitution.
+</p>
+
+<!--begin.rcode sca_vr_to_motifs
+sca_motifs = mutationContext(sca_vr, BSgenome.Hsapiens.1000genomes.hs37d5)
+head(sca_motifs)
+end.rcode-->
+
+<p>
+To continue with the estimation of the somatic signatures, the matrix \(M\) of the
+form {motifs &times; studies} is constructed.  The <code>normalize</code> argument specifies
+that frequencies rather than the actual counts are returned.
+</p>
+
+<!--begin.rcode sca_motif_occurrence
+sca_mm = motifMatrix(sca_motifs, group = "study", normalize = TRUE)
+
+head(round(sca_mm, 4))
+end.rcode-->
+
+
+<p>
+The observed occurrence of the motifs, also termed <i>somatic spectrum</i>, can be
+visualized across studies, which gives a first impression of the data.  The
+distribution of the motifs clearly varies between the studies.
+</p>
+
+<!--begin.rcode sca_mutation_spectrum, fig.cap='Mutation spectrum over studies'
+plotMutationSpectrum(sca_motifs, "study")
+end.rcode-->
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline6" class="outline-3">
+<h3 id="orgheadline6"><span class="section-number-3">4.3</span> Decomposition: Inferring Somatic Signatures</h3>
+<div class="outline-text-3" id="text-4-3">
+<p>
+The somatic signatures can be estimated with each of the statistical methods
+implemented in the package.  Here, we will use the <code>NMF</code> and <code>PCA</code>, and compare
+the results.  Prior to the estimation, the number \(r\) of signatures to obtain
+has to be fixed; in this example, the data will be decomposed into 5 signatures.
+</p>
+
+<!--begin.rcode sca_nmf_pca
+n_sigs = 5
+
+sigs_nmf = identifySignatures(sca_mm, n_sigs, nmfDecomposition)
+
+sigs_pca = identifySignatures(sca_mm, n_sigs, pcaDecomposition)
+end.rcode-->
+
+<!--begin.rcode sca_explore_nmf
+sigs_nmf
+end.rcode-->
+
+<!--begin.rcode sca_explore_pca
+sigs_pca
+end.rcode-->
+
+<p>
+The individual matrices can be further inspected through the accessors
+<code>signatures</code>, <code>samples</code>, <code>observed</code> and <code>fitted</code>.
+</p>
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline7" class="outline-3">
+<h3 id="orgheadline7"><span class="section-number-3">4.4</span> Assessment: Number of Signatures</h3>
+<div class="outline-text-3" id="text-4-4">
+<p>
+Up to now, we have performed the decomposition based on a known number \(r\) of
+signatures.  In many settings, prior biological knowledge or complementing
+experiments may allow to determine \(r\) independently.  If this is not the case,
+we can try to infer suitable values for \(r\) from the data.
+</p>
+
+<p>
+Using the <code>assessNumberSignatures</code> function, we can compute the residuals sum of
+squares (RSS) and the explained variance between the observed \(M\) and fitted
+\(WH\) mutational spectrum for different numbers of signatures.  These measures
+are generally applicable to all kinds of decomposition methods, and can aid in
+choosing a likely number of signatures.  The usage and arguments are analogous
+to the <code>identifySignatures</code> function.
+</p>
+
+<!--begin.rcode 
+n_sigs = 2:8
+
+gof_nmf = assessNumberSignatures(sca_mm, n_sigs, nReplicates = 5)
+
+gof_pca = assessNumberSignatures(sca_mm, n_sigs, pcaDecomposition)
+end.rcode-->
+
+<p>
+The obtained statistics can further be visualized with the
+<code>plotNumberSignatures</code>.  For each tested number of signatures, black crosses
+indicate the results of individual runs, while the red dot represents the
+average over all respective runs.  Please note that having multiple runs is only
+relevant for randomly seeded decomposition methods, as the NMF in our example.
+</p>
+
+<!--begin.rcode fig.cap='Summary statistics for selecting the number of signatures in the NMF decomposition.'
+plotNumberSignatures(gof_nmf)
+end.rcode-->
+
+<!--begin.rcode fig.cap='Summary statistics for selecting the number of signatures in the PCA decomposition.'
+plotNumberSignatures(gof_pca)
+end.rcode-->
+
+<p>
+\(r\) can then be chosen such that increasing the number of signatures does not
+yield a significantly better approximation of the data, i.e. that the RSS and
+the explained variance do not change sufficiently for more complex models.  The
+first inflection point of the RSS curve has also been proposed as a measure for
+the number of features in this context [<a href="#hutchins_position-dependent_2008">9</a>].
+Judging from both statistics for our dataset, a total of 5 signatures seems to
+explain the characteristics of the observed mutational spectrum well.  In
+practice, a combination of a statistical assessment paired with biological
+knowledge about the nature of the data will allow for the most reliable
+interpretation of the results.
+</p>
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline9" class="outline-3">
+<h3 id="orgheadline9"><span class="section-number-3">4.5</span> Visualization: Exploration of Signatures and Samples</h3>
+<div class="outline-text-3" id="text-4-5">
+<p>
+To explore the results for the TCGA data set, we will use the plotting
+functions.  All figures are generated with the <code>ggplot2</code> package, and thus,
+their properties and appearances can directly be modified, even at a later
+stage.
+</p>
+
+<!--begin.rcode load_ggplot2, results='hide',message=FALSE
+library(ggplot2)
+end.rcode-->
+
+<p>
+Focusing on the results of the NMF first, the five somatic signatures (named S1
+to S5) can be visualized either as a heatmap or as a barchart.
+</p>
+
+<!--begin.rcode sca_plot_nmf_signatures_map, fig.cap='Composition of somatic signatures estimated with the NMF, represented as a heatmap.'
+plotSignatureMap(sigs_nmf) + ggtitle("Somatic Signatures: NMF - Heatmap")
+end.rcode-->
+
+<!--begin.rcode sca_plot_nmf_signatures, fig.cap='Composition of somatic signatures estimated with the NMF, represented as a barchart.'
+plotSignatures(sigs_nmf) + ggtitle("Somatic Signatures: NMF - Barchart")
+end.rcode-->
+
+
+<!--begin.rcode 
+plotObservedSpectrum(sigs_nmf)
+end.rcode-->
+
+
+<!--begin.rcode 
+plotFittedSpectrum(sigs_nmf)
+end.rcode-->
+
+
+<p>
+Each signature represents different properties of the somatic spectrum observed
+in the data.  While signature S1 is mainly characterized by selective <code>C&gt;T</code>
+alterations, others as S4 and S5 show a broad distribution across the motifs.
+</p>
+
+<p>
+In addition, the contribution of the signatures in each study can be represented
+with the same sets of plots.  Signature S1 and S3 are strongly represented in
+the GBM and SKCM study, respectively.  Other signatures show a weaker
+association with a single cancer type.
+</p>
+
+<!--begin.rcode sca_plot_nmf_samples_map, fig.cap='Occurrence of signatures estimated with the NMF, represented as a heatmap.'
+plotSampleMap(sigs_nmf)
+end.rcode-->
+
+<!--begin.rcode sca_plot_nmf_samples, fig.cap='Occurrence of signatures estimated with the NMF, represented as a barchart.'
+plotSamples(sigs_nmf)
+end.rcode-->
+
+
+<p>
+In the same way as before, the results of the PCA can be visualized.  In
+contrast to the NMF, the signatures also contain negative values, indicating the
+depletion of a somatic motif.
+</p>
+
+<p>
+Comparing the results of the two methods, we can see similar characteristics
+between the sets of signatures, for example S1 of the NMF and S2 of the PCA.
+</p>
+
+<!--begin.rcode sca_plot_pca_signatures_map, fig.cap='Composition of somatic signatures estimated with the PCA, represented as a heatmap.'
+plotSignatureMap(sigs_pca) + ggtitle("Somatic Signatures: PCA - Heatmap")
+end.rcode-->
+
+<!--begin.rcode sca_plot_pca_signatures, fig.cap='Composition of somatic signatures estimated with the PCA, represented as a barchart.'
+plotSignatures(sigs_pca) + ggtitle("Somatic Signatures: PCA - Barchart")
+end.rcode-->
+
+
+<!--begin.rcode 
+plotFittedSpectrum(sigs_pca)
+end.rcode-->
+
+<p>
+Since the observed mutational spectrum is defined by the data alone, it is
+identical for both all decomposition methods.
+</p>
+
+<!--begin.rcode 
+plotObservedSpectrum(sigs_pca)
+end.rcode-->
+</div>
+
+
+<div id="outline-container-orgheadline8" class="outline-4">
+<h4 id="orgheadline8"><span class="section-number-4">4.5.1</span> Customization: Changing Plot Properties</h4>
+<div class="outline-text-4" id="text-4-5-1">
+<p>
+As elaborated before, since all plots are generated with the <code>ggplot2</code> framework
+[<a href="#wickham_ggplot2:_2010">15</a>], we can change all their properties.  To continue the
+example from before, we will visualize the relative contribution of the
+mutational signatures in the studies, and change the plot to fit our needs
+better.
+</p>
+
+<!--begin.rcode load_ggplot2_again, results='hide',message=FALSE
+library(ggplot2)
+end.rcode-->
+
+<!--begin.rcode sca_plot_nmf_samples_mod, results='hide',message=FALSE
+p = plotSamples(sigs_nmf)
+
+## (re)move the legend
+p = p + theme(legend.position = "none")
+## (re)label the axis
+p = p + xlab("Studies")
+## add a title
+p = p + ggtitle("Somatic Signatures in TGCA WES Data")
+## change the color scale
+p = p + scale_fill_brewer(palette = "Blues")
+## decrease the size of x-axis labels
+p = p + theme(axis.text.x = element_text(size = 9))
+end.rcode-->
+
+<!--begin.rcode sca_plot_nmf_samples_mod_print, fig.cap='Occurrence of signatures estimated with the NMF, customized plot. See the original plot above for comparisons.'
+p
+end.rcode-->
+
+
+<p>
+If you want to visualize a large number of samples or signatures, the default
+color palette may not provide a sufficient number of distinct colors.  You can
+add a well-suited palette to your plot, as we have shown before with the
+<code>scale_fill</code> functions.  For example, <code>scale_fill_discrete</code> will get you the
+default <code>ggplot2</code> color scheme; while this supports many more colors, the
+individual levels may be hard to distinguish.
+</p>
+</div>
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline10" class="outline-3">
+<h3 id="orgheadline10"><span class="section-number-3">4.6</span> Clustering: Grouping by Motifs or Samples</h3>
+<div class="outline-text-3" id="text-4-6">
+<p>
+An alternative approach to interpreting the mutational spectrum by decomposition
+is clustering.  With the <code>clusterSpectrum</code> function, the clustering is computed,
+by grouping either by the <code>sample</code> or <code>motif</code> dimension of the spectrum.  By
+default, the Euclidean distance is used; other distance measures, as for example
+cosine similarity, are implemented is the <code>proxy</code> package and can be passed as
+an optional argument.
+</p>
+
+<!--begin.rcode 
+clu_motif = clusterSpectrum(sca_mm, "motif")
+end.rcode-->
+
+<!--begin.rcode fig.cap='Hierachical clustering of the mutational spectrum, according to motif.'
+library(ggdendro)
+
+p = ggdendrogram(clu_motif, rotate = TRUE)
+p
+end.rcode-->
+</div>
+</div>
+
+
+
+<div id="outline-container-orgheadline11" class="outline-3">
+<h3 id="orgheadline11"><span class="section-number-3">4.7</span> Extension: Correction for Batch Effects and Confounding Variables</h3>
+<div class="outline-text-3" id="text-4-7">
+<p>
+When investigating somatic signatures between samples from different studies,
+corrections for technical confounding factors should be considered.  In our use
+case of the TCGA WES studies, this is of minor influence due to similar
+sequencing technology and variant calling methods across the studies.
+Approaches for the identification of so termed batch effects have been proposed
+[<a href="#leek_capturing_2007">10</a>,<a href="#sun_multiple_2012">14</a>] and existing implementations can
+be used in identifying confounding variables as well as correcting for them.
+The best strategy in addressing technical effects depends strongly on the
+experimental design; we recommend reading the respective literature and software
+documentation for finding an optimal solution in complex settings.
+</p>
+
+<p>
+From the metadata of the TCGA studies, we have noticed that two different
+sequencing approaches have been employed, constituting a potential technical
+batch effect.  The <code>ComBat</code> function of the <code>sva</code> package allows us to adjust
+for this covariate, which yields a mutational spectrum corrected for
+contributions related to sequencing technology.  We can then continue with the
+identification of somatic signatures as we have seen before.
+</p>
+
+<!--begin.rcode sva_load, results='hide',message=FALSE
+library(sva)
+end.rcode-->
+
+<!--begin.rcode sva_batch
+sca_anno = as.data.frame(lapply(sca_metadata, unlist))
+
+model_null = model.matrix(~ 1, sca_anno)
+
+sca_mm_batch = ComBat(sca_mm, batch = sca_anno$Sequence_Source, mod = model_null)
+end.rcode-->
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline12" class="outline-3">
+<h3 id="orgheadline12"><span class="section-number-3">4.8</span> Extension: Normalization of Sequence Motif Frequencies</h3>
+<div class="outline-text-3" id="text-4-8">
+<p>
+If comparisons are performed across samples or studies with different capture
+targets, for example by comparing whole exome with whole genome sequencing,
+further corrections for the frequency of sequence motifs can be taken into
+account [<a href="#nik-zainal_mutational_2012">11</a>].  The <code>kmerFrequency</code> function provides
+the basis for calculating the occurrence of k-mers over a set of ranges of a
+reference sequence.
+</p>
+
+<p>
+As an example, we compute the frequency of 3-mers for the human toplevel
+chromosomes, based on a sample of 10'000 locations.
+</p>
+
+<!--begin.rcode kmer_hs_chrs, results='hide',message=FALSE
+k = 3
+n = 1e4
+
+hs_chrs = as(seqinfo(BSgenome.Hsapiens.1000genomes.hs37d5), "GRanges")
+hs_chrs = keepSeqlevels(hs_chrs, c(1:22, "X", "Y"))
+
+k3_hs_chrs = kmerFrequency(BSgenome.Hsapiens.1000genomes.hs37d5, n, k, hs_chrs)
+k3_hs_chrs
+end.rcode-->
+
+<p>
+Analogously, the k-mer occurrence across a set of enriched regions, such as in
+exome or targeted sequencing, can be obtained easily.  The following outlines
+how to apply the approach to the human exome.
+</p>
+
+<!--begin.rcode kmer_exons, eval=FALSE
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+
+k = 3
+n = 1e4
+
+hs_exons = reduce(exons(TxDb.Hsapiens.UCSC.hg19.knownGene))
+hs_exons = ncbi(keepStandardChromosomes(hs_exons))
+
+k3_exons = kmerFrequency(BSgenome.Hsapiens.1000genomes.hs37d5, n, k, hs_exons)
+end.rcode-->
+
+<p>
+With the <code>normalizeMotifs</code> function, the frequency of motifs can be adjusted.
+Here, we will transform our results of the TCGA WES studies to have the same
+motif distribution as of a whole-genome analysis.  The <code>kmers</code> dataset contains
+the estimated frequency of 3-mers across the human genome and exome.
+</p>
+
+<!--begin.rcode normalize_motifs
+data(kmers)
+norms = k3wg / k3we
+head(norms)
+
+sca_mm_norm = normalizeMotifs(sca_mm, norms)
+end.rcode-->
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline13" class="outline-3">
+<h3 id="orgheadline13"><span class="section-number-3">4.9</span> Extension: Motifs from Non-Reference Genomes<a id="orgtarget1"></a></h3>
+<div class="outline-text-3" id="text-4-9">
+<p>
+When we <a href="#orgtarget2">determine the sequence context</a> for each alteration, we typically use one
+of the reference BSgenome packages in Bioconductor.  But we are not restricted
+to those, and derive the somatic motifs from different types of sequence
+sources, for example 2bit and FASTA files.  More precisely, the
+<code>mutationContext</code> function will work on any object for which a <code>getSeq</code> method
+is defined.  You can get the full list available on your system, the results may
+vary depending on which packages you have loaded.
+</p>
+
+<!--begin.rcode 
+showMethods("getSeq")
+end.rcode-->
+
+<p>
+This allows us to perform our analysis also on non-standard organisms and
+genomes, for which a BSgenome package is not available, for example the
+1000genomes human reference sequence.  Or we can generate genomic references for
+specific populations, by updating the standard genomes with a set of known
+variants; see the documentation of the <code>BSgenome</code> package and the <code>injectSNPs</code>
+function in particular for this.
+</p>
+
+<p>
+Taking further, we can base our analysis on the personalized genomic sequence
+for each individual, in case it is available.  If we imagined that we had a set
+of somatic variant calls as <code>VCF</code> files and the personalized genomic sequence as
+<code>FASTA</code> files for two individuals <code>A</code> and <code>B</code> at hand, here a simple outline on
+how our analysis could work.
+</p>
+
+<!--begin.rcode eval=FALSE
+## Somatic variant calls
+vr_A = readVcfAsVRanges(vcf_A_path, "GenomeA")
+vr_B = readVcfAsVRanges(vcf_B_path, "GenomeB")
+
+## Genomic sequences
+fa_A = FaFile(fasta_A_path)
+fa_B = FaFile(fasta_B_path)
+
+## Somatic motifs
+vr_A = mutationContext(vr_A, fa_A)
+vr_B = mutationContext(vr_B, fa_B)
+
+## Combine for further analysis
+vr = c(vr_A, vr_B)
+end.rcode-->
+</div>
+</div>
+</div>
+
+
+
+<div id="outline-container-orgheadline15" class="outline-2">
+<h2 id="orgheadline15"><span class="section-number-2">5</span> Alternatives: Inferring Somatic Signatures with Different Approaches</h2>
+<div class="outline-text-2" id="text-5">
+<p>
+For the identification of somatic signatures, other methods and implementations
+exist.  The original framework [<a href="#nik-zainal_mutational_2012">11</a>,<a href="#alexandrov_deciphering_2013">3</a>] proposed for this is based on the NMF and
+available for the Matlab programming language [<a href="#alexandrov_wtsi_2012">1</a>].  In
+extension, a probabilistic approach based on Poisson processes has been proposed
+[<a href="#fischer_emu:_2013-1">6</a>] and implemented [<a href="#fischer_emu:_2013">5</a>].
+</p>
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline20" class="outline-2">
+<h2 id="orgheadline20"><span class="section-number-2">6</span> Frequently Asked Questions</h2>
+<div class="outline-text-2" id="text-6">
+</div><div id="outline-container-orgheadline16" class="outline-3">
+<h3 id="orgheadline16"><span class="section-number-3">6.1</span> Citing SomaticSignatures</h3>
+<div class="outline-text-3" id="text-6-1">
+<p>
+If you use the <code>SomaticSignatures</code> package in your work, please cite it:
+</p>
+
+<!--begin.rcode 
+citation("SomaticSignatures")
+end.rcode-->
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline17" class="outline-3">
+<h3 id="orgheadline17"><span class="section-number-3">6.2</span> Getting Help</h3>
+<div class="outline-text-3" id="text-6-2">
+<p>
+We welcome questions or suggestions about our software, and want to ensure that
+we eliminate issues if and when they appear.  We have a few requests to optimize
+the process:
+</p>
+
+<ul class="org-ul">
+<li>All questions and follow-ups should take place over the <a href="http://support.bioconductor.org/">Bioconductor support
+site</a>, which serves as a repository of information.  First search the site for
+past threads which might have answered your question.</li>
+
+<li>The subject line should contain <i>SomaticSignatures</i> and a few words describing
+the problem.</li>
+
+<li>If you have a question about the behavior of a function, read the sections of
+the manual page for this function by typing a question mark and the function
+name, e.g. <code>?mutationContext</code>.  Additionally, read through the vignette to
+understand the interplay between different functions of the package.  We spend
+a lot of time documenting individual functions and the exact steps that the
+software is performing.</li>
+
+<li>Include all of your R code and its output related to the question you are
+asking.</li>
+
+<li>Include complete warning or error messages, and conclude your message with the
+full output of <code>sessionInfo()</code>.</li>
+</ul>
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline18" class="outline-3">
+<h3 id="orgheadline18"><span class="section-number-3">6.3</span> Installing and Upgrading</h3>
+<div class="outline-text-3" id="text-6-3">
+<p>
+Before you want to install the <code>SomaticSignatures</code> package, please ensure that
+you have the latest version of <code>R</code> and <code>Bioconductor</code> installed.  For details on
+this, please have a look at the help packages for <a href="http://cran.r-project.org/">R</a> and <a href="http://bioconductor.org/install/">Bioconductor</a>.  Then you
+can open <code>R</code> and run the following commands which will install the latest
+release version of <code>SomaticSignatures</code>:
+</p>
+
+<!--begin.rcode eval=FALSE
+source("http://bioconductor.org/biocLite.R")
+biocLite("SomaticSignatures")
+end.rcode-->
+
+<p>
+Over time, the packages may also receive updates with bug fixes.  These
+installed packages can be updated with:
+</p>
+
+<!--begin.rcode eval=FALSE
+source("http://bioconductor.org/biocLite.R")
+biocLite()
+end.rcode-->
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline19" class="outline-3">
+<h3 id="orgheadline19"><span class="section-number-3">6.4</span> Working with VRanges</h3>
+<div class="outline-text-3" id="text-6-4">
+<p>
+A central object in the workflow of <code>SomaticSignatures</code> is the <code>VRanges</code> class
+which is part of the <code>VariantAnnotation</code> package.  It builds upon the commonly
+used <code>GRanges</code> class of the <code>GenomicRanges</code> package.  Essentially, each row
+represents a variant in terms of its genomic location as well as its reference
+and alternative allele.
+</p>
+
+<!--begin.rcode results='hide', message=FALSE
+library(VariantAnnotation)
+end.rcode-->
+
+<p>
+There are multiple ways of converting its own variant calls into a <code>VRanges</code>
+object.  One can for example import them from a <code>VCF</code> file with the <code>readVcf</code>
+function or employ the <code>readMutect</code> function for importing variant calls from
+the <code>MuTect</code> caller directly.  Further, one can also construct it from any other
+format in the form of:
+</p>
+
+<!--begin.rcode 
+vr = VRanges(
+    seqnames = "chr1",
+    ranges = IRanges(start = 1000, width = 1),
+    ref = "A",
+    alt = "C")
+
+vr
+end.rcode-->
+</div>
+</div>
+</div>
+
+
+
+<div id="outline-container-orgheadline21" class="outline-2">
+<h2 id="orgheadline21"><span class="section-number-2">7</span> References</h2>
+<div class="outline-text-2" id="text-7">
+<div id="bibliography">
+<h2>References</h2>
+
+</div>
+<table>
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="alexandrov_wtsi_2012">1</a>]
+</td>
+<td class="bibtexitem">
+L.&nbsp;Alexandrov.
+ WTSI Mutational Signature Framework, Oct. 2012.
+[&nbsp;<a href="http://www.mathworks.de/matlabcentral/fileexchange/38724-wtsi-mutational-signature-framework">http</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="alexandrov_signatures_2013">2</a>]
+</td>
+<td class="bibtexitem">
+L.&nbsp;B. Alexandrov, S.&nbsp;Nik-Zainal, D.&nbsp;C. Wedge, S.&nbsp;A. J.&nbsp;R. Aparicio, S.&nbsp;Behjati,
+  A.&nbsp;V. Biankin, G.&nbsp;R. Bignell, N.&nbsp;Bolli, A.&nbsp;Borg, A.-L. B&oslash;rresen-Dale,
+  S.&nbsp;Boyault, B.&nbsp;Burkhardt, A.&nbsp;P. Butler, C.&nbsp;Caldas, H.&nbsp;R. Davies, C.&nbsp;Desmedt,
+  R.&nbsp;Eils, J.&nbsp;E. Eyfj&ouml;rd, J.&nbsp;A. Foekens, M.&nbsp;Greaves, F.&nbsp;Hosoda, B.&nbsp;Hutter,
+  T.&nbsp;Ilicic, S.&nbsp;Imbeaud, M.&nbsp;Imielinsk, N.&nbsp;J&auml;ger, D.&nbsp;T.&nbsp;W. Jones, D.&nbsp;Jones,
+  S.&nbsp;Knappskog, M.&nbsp;Kool, S.&nbsp;R. Lakhani, C.&nbsp;L&oacute;pez-Ot&iacute;n, S.&nbsp;Martin, N.&nbsp;C.
+  Munshi, H.&nbsp;Nakamura, P.&nbsp;A. Northcott, M.&nbsp;Pajic, E.&nbsp;Papaemmanuil, A.&nbsp;Paradiso,
+  J.&nbsp;V. Pearson, X.&nbsp;S. Puente, K.&nbsp;Raine, M.&nbsp;Ramakrishna, A.&nbsp;L. Richardson,
+  J.&nbsp;Richter, P.&nbsp;Rosenstiel, M.&nbsp;Schlesner, T.&nbsp;N. Schumacher, P.&nbsp;N. Span, J.&nbsp;W.
+  Teague, Y.&nbsp;Totoki, A.&nbsp;N.&nbsp;J. Tutt, R.&nbsp;Vald&eacute;s-Mas, M.&nbsp;M. van Buuren,
+  L.&nbsp;v.&nbsp;. Veer, A.&nbsp;Vincent-Salomon, N.&nbsp;Waddell, L.&nbsp;R. Yates,
+  Australian Pancreatic Cancer Genome Initiative, ICGC Breast Cancer
+  Consortium, ICGC MMML-Seq Consortium, Icgc PedBrain, J.&nbsp;Zucman-Rossi,
+  P.&nbsp;Andrew&nbsp;Futreal, U.&nbsp;McDermott, P.&nbsp;Lichter, M.&nbsp;Meyerson, S.&nbsp;M. Grimmond,
+  R.&nbsp;Siebert, E.&nbsp;Campo, T.&nbsp;Shibata, S.&nbsp;M. Pfister, P.&nbsp;J. Campbell, and M.&nbsp;R.
+  Stratton.
+ Signatures of mutational processes in human cancer.
+ <em>Nature</em>, 500(7463):415-421, Aug. 2013.
+[&nbsp;<a href="http://dx.doi.org/10.1038/nature12477">DOI</a>&nbsp;| 
+<a href="http://www.nature.com/nature/journal/v500/n7463/full/nature12477.html">.html</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="alexandrov_deciphering_2013">3</a>]
+</td>
+<td class="bibtexitem">
+L.&nbsp;B. Alexandrov, S.&nbsp;Nik-Zainal, D.&nbsp;C. Wedge, P.&nbsp;J. Campbell, and M.&nbsp;R.
+  Stratton.
+ Deciphering Signatures of Mutational Processes Operative in
+  Human Cancer.
+ <em>Cell Reports</em>, 3(1):246-259, Jan. 2013.
+[&nbsp;<a href="http://dx.doi.org/10.1016/j.celrep.2012.12.008">DOI</a>&nbsp;| 
+<a href="http://www.sciencedirect.com/science/article/pii/S2211124712004330">http</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="cibulskis_sensitive_2013">4</a>]
+</td>
+<td class="bibtexitem">
+K.&nbsp;Cibulskis, M.&nbsp;S. Lawrence, S.&nbsp;L. Carter, A.&nbsp;Sivachenko, D.&nbsp;Jaffe,
+  C.&nbsp;Sougnez, S.&nbsp;Gabriel, M.&nbsp;Meyerson, E.&nbsp;S. Lander, and G.&nbsp;Getz.
+ Sensitive detection of somatic point mutations in impure and
+  heterogeneous cancer samples.
+ <em>Nature Biotechnology</em>, advance online publication, Feb. 2013.
+[&nbsp;<a href="http://dx.doi.org/10.1038/nbt.2514">DOI</a>&nbsp;| 
+<a href="http://www.nature.com/nbt/journal/vaop/ncurrent/full/nbt.2514.html">.html</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="fischer_emu:_2013">5</a>]
+</td>
+<td class="bibtexitem">
+A.&nbsp;Fischer, C.&nbsp;J. Illingworth, P.&nbsp;J. Campbell, and V.&nbsp;Mustonen.
+ EMu: probabilistic inference of mutational processes and their
+  localization in the cancer genome.
+ <em>Genome biology</em>, 14(4):R39, Apr. 2013.
+[&nbsp;<a href="http://dx.doi.org/10.1186/gb-2013-14-4-r39">DOI</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="fischer_emu:_2013-1">6</a>]
+</td>
+<td class="bibtexitem">
+A.&nbsp;Fischer.
+ EMu: Expectation-Maximisation inference of mutational
+  signatures, 2013.
+[&nbsp;<a href="http://www.sanger.ac.uk/resources/software/emu/">http</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="gaujoux_flexible_2010">7</a>]
+</td>
+<td class="bibtexitem">
+R.&nbsp;Gaujoux and C.&nbsp;Seoighe.
+ A flexible R package for nonnegative matrix factorization.
+ <em>BMC Bioinformatics</em>, 11(1):367, July 2010.
+[&nbsp;<a href="http://dx.doi.org/10.1186/1471-2105-11-367">DOI</a>&nbsp;| 
+<a href="http://www.biomedcentral.com/1471-2105/11/367/abstract">http</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="gentleman_bioconductor:_2004">8</a>]
+</td>
+<td class="bibtexitem">
+R.&nbsp;C. Gentleman, V.&nbsp;J. Carey, D.&nbsp;M. Bates, B.&nbsp;Bolstad, M.&nbsp;Dettling, S.&nbsp;Dudoit,
+  B.&nbsp;Ellis, L.&nbsp;Gautier, Y.&nbsp;Ge, J.&nbsp;Gentry, K.&nbsp;Hornik, T.&nbsp;Hothorn, W.&nbsp;Huber,
+  S.&nbsp;Iacus, R.&nbsp;Irizarry, F.&nbsp;Leisch, C.&nbsp;Li, M.&nbsp;Maechler, A.&nbsp;J. Rossini,
+  G.&nbsp;Sawitzki, C.&nbsp;Smith, G.&nbsp;Smyth, L.&nbsp;Tierney, J.&nbsp;Y. Yang, and J.&nbsp;Zhang.
+ Bioconductor: open software development for computational biology and
+  bioinformatics.
+ <em>Genome Biology</em>, 5(10):R80, Sept. 2004.
+[&nbsp;<a href="http://dx.doi.org/10.1186/gb-2004-5-10-r80">DOI</a>&nbsp;| 
+<a href="http://genomebiology.com/2004/5/10/R80/abstract">http</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="hutchins_position-dependent_2008">9</a>]
+</td>
+<td class="bibtexitem">
+L.&nbsp;N. Hutchins, S.&nbsp;M. Murphy, P.&nbsp;Singh, and J.&nbsp;H. Graber.
+ Position-dependent motif characterization using non-negative matrix
+  factorization.
+ <em>Bioinformatics</em>, 24(23):2684-2690, Dec. 2008.
+[&nbsp;<a href="http://dx.doi.org/10.1093/bioinformatics/btn526">DOI</a>&nbsp;| 
+<a href="http://bioinformatics.oxfordjournals.org/content/24/23/2684">http</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="leek_capturing_2007">10</a>]
+</td>
+<td class="bibtexitem">
+J.&nbsp;T. Leek and J.&nbsp;D. Storey.
+ Capturing Heterogeneity in Gene Expression Studies by
+  Surrogate Variable Analysis.
+ <em>PLoS Genet</em>, 3(9):e161, Sept. 2007.
+[&nbsp;<a href="http://dx.doi.org/10.1371/journal.pgen.0030161">DOI</a>&nbsp;| 
+<a href="http://dx.plos.org/10.1371/journal.pgen.0030161">http</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="nik-zainal_mutational_2012">11</a>]
+</td>
+<td class="bibtexitem">
+S.&nbsp;Nik-Zainal, L.&nbsp;B. Alexandrov, D.&nbsp;C. Wedge, P.&nbsp;Van&nbsp;Loo, C.&nbsp;D. Greenman,
+  K.&nbsp;Raine, D.&nbsp;Jones, J.&nbsp;Hinton, J.&nbsp;Marshall, L.&nbsp;A. Stebbings, A.&nbsp;Menzies,
+  S.&nbsp;Martin, K.&nbsp;Leung, L.&nbsp;Chen, C.&nbsp;Leroy, M.&nbsp;Ramakrishna, R.&nbsp;Rance, K.&nbsp;W. Lau,
+  L.&nbsp;J. Mudie, I.&nbsp;Varela, D.&nbsp;J. McBride, G.&nbsp;R. Bignell, S.&nbsp;L. Cooke, A.&nbsp;Shlien,
+  J.&nbsp;Gamble, I.&nbsp;Whitmore, M.&nbsp;Maddison, P.&nbsp;S. Tarpey, H.&nbsp;R. Davies,
+  E.&nbsp;Papaemmanuil, P.&nbsp;J. Stephens, S.&nbsp;McLaren, A.&nbsp;P. Butler, J.&nbsp;W. Teague,
+  G.&nbsp;J&ouml;nsson, J.&nbsp;E. Garber, D.&nbsp;Silver, P.&nbsp;Miron, A.&nbsp;Fatima, S.&nbsp;Boyault,
+  A.&nbsp;Langer&oslash;d, A.&nbsp;Tutt, J.&nbsp;W. Martens, S.&nbsp;A. Aparicio, A.&nbsp;Borg, A.&nbsp;V.
+  Salomon, G.&nbsp;Thomas, A.-L. B&oslash;rresen-Dale, A.&nbsp;L. Richardson, M.&nbsp;S.
+  Neuberger, P.&nbsp;A. Futreal, P.&nbsp;J. Campbell, and M.&nbsp;R. Stratton.
+ Mutational Processes Molding the Genomes of 21 Breast
+  Cancers.
+ <em>Cell</em>, 149(5):979-993, May 2012.
+[&nbsp;<a href="http://dx.doi.org/10.1016/j.cell.2012.04.024">DOI</a>&nbsp;| 
+<a href="http://www.sciencedirect.com/science/article/pii/S0092867412005284">http</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="obenchain_variantannotation:_2011">12</a>]
+</td>
+<td class="bibtexitem">
+V.&nbsp;Obenchain, M.&nbsp;Morgan, and M.&nbsp;Lawrence.
+ VariantAnnotation: Annotation of Genetic Variants, 2011.
+[&nbsp;<a href="http://bioconductor.org/packages/release/bioc/html/VariantAnnotation.html">.html</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="stacklies_pcamethodsbioconductor_2007">13</a>]
+</td>
+<td class="bibtexitem">
+W.&nbsp;Stacklies, H.&nbsp;Redestig, M.&nbsp;Scholz, D.&nbsp;Walther, and J.&nbsp;Selbig.
+ pcaMethodsa bioconductor package providing PCA
+  methods for incomplete data.
+ <em>Bioinformatics</em>, 23(9):1164-1167, May 2007.
+[&nbsp;<a href="http://dx.doi.org/10.1093/bioinformatics/btm069">DOI</a>&nbsp;| 
+<a href="http://bioinformatics.oxfordjournals.org/content/23/9/1164">http</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="sun_multiple_2012">14</a>]
+</td>
+<td class="bibtexitem">
+Y.&nbsp;Sun, N.&nbsp;R. Zhang, and A.&nbsp;B. Owen.
+ Multiple hypothesis testing adjusted for latent variables, with an
+  application to the AGEMAP gene expression data.
+ <em>The Annals of Applied Statistics</em>, 6(4):1664-1688, Dec. 2012.
+ Zentralblatt MATH identifier: 06141543; Mathematical Reviews number
+  (MathSciNet): MR3058679.
+[&nbsp;<a href="http://dx.doi.org/10.1214/12-AOAS561">DOI</a>&nbsp;| 
+<a href="http://projecteuclid.org/euclid.aoas/1356629055">http</a>&nbsp;]
+
+</td>
+</tr>
+
+
+<tr valign="top">
+<td align="right" class="bibtexnumber">
+[<a name="wickham_ggplot2:_2010">15</a>]
+</td>
+<td class="bibtexitem">
+H.&nbsp;Wickham.
+ <em>ggplot2: Elegant Graphics for Data Analysis</em>.
+ Springer, New York, 1st ed. 2009. corr. 3rd printing 2010 edition
+  edition, Feb. 2010.
+[&nbsp;<a href="http://ggplot2.org">http</a>&nbsp;]
+
+</td>
+</tr>
+</table>
+</div>
+</div>
+
+
+<div id="outline-container-orgheadline22" class="outline-2">
+<h2 id="orgheadline22"><span class="section-number-2">8</span> Session Information</h2>
+<div class="outline-text-2" id="text-8">
+<!--begin.rcode echo=FALSE, results='markup'
+sessionInfo()
+end.rcode-->
+</div>
+</div>
+</div>
+</body>
+</html>
